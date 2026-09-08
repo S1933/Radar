@@ -29,31 +29,14 @@ services:
       RADAR_DB_USER: radar
       RADAR_DB_PASSWORD: radar
       RADAR_DB_NAME: radar
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID}
       REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       X_AUTH_TOKEN: ${X_AUTH_TOKEN}
       X_CT0: ${X_CT0}
-      # The YAML carries the host path; inside the container the vault is
-      # mounted at /data/obsidian. Without this override, /save wrote into
-      # the container's ephemeral filesystem.
-      RADAR_OBSIDIAN_VAULT: /data/obsidian
-      # Bind the bookmark dashboard on all interfaces inside the container
-      # so the host can reach it via the bridge IP. The published port below
-      # also limits exposure to 127.0.0.1.
-      RADAR_WEB_ADDR: 0.0.0.0:8081
     volumes:
       - ../config:/app/config:ro
-      - /home/pi/obsidian/Hermes:/data/obsidian
-    # Expose the bookmark dashboard on host 127.0.0.1:8081 — cloudflared
-    # routes radar.gastronomie-domicile.fr to http://localhost:8081. Not
-    # published on 0.0.0.0 so the dashboard stays on the host's loopback
-    # only; tunnel/cloudflared is the public entry point.
-    ports:
-      - "127.0.0.1:8081:8081"
     command: ["run", "-config", "config/radar.yaml"]
     restart: unless-stopped
 

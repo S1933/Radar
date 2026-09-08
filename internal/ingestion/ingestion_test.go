@@ -102,7 +102,7 @@ func (c *captureLog) Warn(_ string, _ ...any) {}
 func TestIngestBatch_DedupByCanonicalURL(t *testing.T) {
 	fs := newFakeStore()
 	log := &captureLog{}
-	s := New(fs, log, nil, nil)
+	s := New(fs, log)
 
 	common := model.Item{
 		Title:        "OpenAI releases Agent SDK",
@@ -154,7 +154,7 @@ func TestIngestBatch_DedupByContentHash(t *testing.T) {
 	// Same title + same content, no canonical URL on either side.
 	// FindDuplicate should fall back to the content hash.
 	fs := newFakeStore()
-	s := New(fs, &captureLog{}, nil, nil)
+	s := New(fs, &captureLog{})
 
 	mk := func(src, sid string) model.Item {
 		return model.Item{
@@ -185,7 +185,7 @@ func TestIngestBatch_NoFalsePositive(t *testing.T) {
 	// Empty canonical URL + empty content hash → FindDuplicate returns
 	// (0, false, nil) and IngestBatch falls through to InsertItem.
 	fs := newFakeStore()
-	s := New(fs, &captureLog{}, nil, nil)
+	s := New(fs, &captureLog{})
 
 	items := []model.Item{
 		{Source: "rss", SourceID: "1", Title: "Different story A"},
@@ -208,7 +208,7 @@ func TestIngestBatch_DedupLogSilentOnSelfMatch(t *testing.T) {
 	// only when the originating source differs.
 	fs := newFakeStore()
 	log := &captureLog{}
-	s := New(fs, log, nil, nil)
+	s := New(fs, log)
 
 	common := model.Item{
 		Title:        "OpenAI ships GPT",
@@ -241,7 +241,7 @@ func TestIngestBatch_DedupLogNoisyOnCrossSource(t *testing.T) {
 	// coverage in production.
 	fs := newFakeStore()
 	log := &captureLog{}
-	s := New(fs, log, nil, nil)
+	s := New(fs, log)
 
 	common := model.Item{
 		Title:        "OpenAI ships GPT",

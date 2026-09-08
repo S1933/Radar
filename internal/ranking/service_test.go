@@ -2,6 +2,7 @@ package ranking
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/S1933/personal-radar/internal/store"
@@ -37,25 +38,13 @@ func TestHeuristicScoring(t *testing.T) {
 }
 
 func TestFinalScoreWeights(t *testing.T) {
-	sc := store.Score{Relevance: 1, Importance: 1, Novelty: 1, Actionability: 1, Personalization: 1}
+	sc := store.Score{Relevance: 1, Importance: 1, Novelty: 1, Actionability: 1}
 	got := finalScore(sc)
-	if got != 1.0 {
+	if math.Abs(got-1.0) > 1e-9 {
 		t.Errorf("all-ones score should be 1.0, got %.2f", got)
 	}
 	empty := finalScore(store.Score{})
 	if empty != 0 {
 		t.Errorf("zero score must be 0, got %.2f", empty)
-	}
-}
-
-func TestPersonalizationScore(t *testing.T) {
-	it := store.ScoredItem{Topics: []string{"ai"}, Source: "rss", Author: "OpenAI"}
-	prefs := map[string]map[string]float64{
-		"topic":  {"ai": 1.0},
-		"source": {"rss": -0.5},
-	}
-	got := personalizationScore(it, prefs)
-	if got < -0.1 || got > 0.3 {
-		t.Errorf("unexpected personalization score: %.2f", got)
 	}
 }

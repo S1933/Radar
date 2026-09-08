@@ -13,7 +13,6 @@ briefing:
   schedules: ["08:00", "14:00", "20:00"]  # 3 daily briefings (was single 07:00)
   max_items: 10
   max_trends: 3
-  send: true
 
 topics:
   - ai
@@ -110,17 +109,6 @@ x:
   lists:
     - "2093633176459436076"  # user X list "Radar IA" — followed live (add/remove = auto)
 
-linkedin:
-  enabled: false  # LinkedIn is login-wall + anti-scrape; static/voyager/headless all blocked. X (mirror) + RSS cover the same orgs.
-  pages:
-    - name: OpenAI
-      url: https://www.linkedin.com/company/openai/
-    - name: Anthropic
-      url: https://www.linkedin.com/company/anthropic/
-
-telegram:
-  enabled: true
-
 models:
   base_url: https://opencode.ai/zen/go/v1
   llm_rank: false  # Stage-2 LLM scoring is slow (1 call/item); heuristic is default
@@ -130,9 +118,3 @@ models:
     model: deepseek-v4-flash
   synthesis:
     model: deepseek-v4-flash
-  deepdive:
-    model: deepseek-v4-flash
-
-obsidian:
-  enabled: true
-  vault_path: /home/pi/obsidian/Hermes

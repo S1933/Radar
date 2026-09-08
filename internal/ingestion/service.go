@@ -2,7 +2,6 @@ package ingestion
 
 import (
 	"context"
-	"strings"
 
 	"github.com/S1933/personal-radar/internal/model"
 	"github.com/S1933/personal-radar/internal/topics"
@@ -19,37 +18,8 @@ type Collector interface {
 
 // Service ingests batches of items into the store with dedup.
 type Service struct {
-	store      Store
-	log        Logger
-	summarizer Summarizer
-	summaryDB  SummaryStore
-}
-
-// Summarizer generates the French summary that the dashboard displays on
-// each card. Implementations must be safe for concurrent use; ingestion
-// invokes Summarize from a single goroutine so concurrency is moot but
-// the contract stays narrow. When nil, ingestion skips the LLM step and
-// the dashboard renders without a French recap (the raw title is shown).
-//
-// The `existing` parameter mirrors summary.Service — when the caller has
-// already produced a summary (cache hit, prior attempt), it short-circuits
-// the LLM. ingestion always passes the zero value since the row is fresh.
-type Summarizer interface {
-	Enabled() bool
-	Summarize(ctx context.Context, id int64, title, content, source string, existing ExistingSummary) (frTitle string, points []string, err error)
-}
-
-// ExistingSummary is the minimal shape ingestion needs from a cached
-// summary. Kept here to avoid importing the summary package (which would
-// create an import cycle: summary → ingestion).
-type ExistingSummary struct {
-	Title  string
-	Points []string
-}
-
-// SummaryStore persists the produced summary on the item row.
-type SummaryStore interface {
-	SetSummaryFR(ctx context.Context, id int64, title, summary string) error
+	store Store
+	log   Logger
 }
 
 type Store interface {
@@ -72,12 +42,9 @@ type Logger interface {
 	Warn(msg string, kv ...any)
 }
 
-// New builds the ingestion service. summarizer and summaryDB may be nil —
-// in that case the French summary is generated lazily by the web layer on
-// first dashboard view, which preserves the old behaviour for tests and
-// short-lived tooling that does not need the dashboard optimisation.
-func New(store Store, log Logger, summarizer Summarizer, summaryDB SummaryStore) *Service {
-	return &Service{store: store, log: log, summarizer: summarizer, summaryDB: summaryDB}
+// New builds the ingestion service.
+func New(store Store, log Logger) *Service {
+	return &Service{store: store, log: log}
 }
 
 // IngestBatch normalizes, hashes and stores items. Returns the number of
@@ -130,7 +97,6 @@ func (s *Service) IngestBatch(ctx context.Context, collector string, items []mod
 		}
 		if isNew {
 			inserted++
-			s.summarizeNew(ctx, id, it)
 			continue
 		}
 		// (source, source_id) already exists — the canonical_url /
@@ -143,28 +109,4 @@ func (s *Service) IngestBatch(ctx context.Context, collector string, items []mod
 		}
 	}
 	return inserted, nil
-}
-
-// summarizeNew generates and persists the French summary for a freshly
-// inserted item. The goal is to have the dashboard ready to render the
-// recap immediately — no lazy /api/summary/{id} round-trip, no placeholder.
-// On LLM failure the row stays as-is; the dashboard falls back to the raw
-// title. We do not retry: the next collector pass will see the row but
-// the "newly inserted" path is bypassed by the (source, source_id)
-// conflict guard. A future maintenance job can re-summarise the orphans.
-func (s *Service) summarizeNew(ctx context.Context, id int64, it model.Item) {
-	if s.summarizer == nil || s.summaryDB == nil || !s.summarizer.Enabled() {
-		return
-	}
-	frTitle, points, err := s.summarizer.Summarize(ctx, id, it.Title, it.Content, it.Source, ExistingSummary{})
-	if err != nil {
-		s.log.Warn("summarize", "item_id", id, "error", err)
-		return
-	}
-	if frTitle == "" && len(points) == 0 {
-		return
-	}
-	if err := s.summaryDB.SetSummaryFR(ctx, id, frTitle, strings.Join(points, "\n")); err != nil {
-		s.log.Warn("persist summary", "item_id", id, "error", err)
-	}
 }

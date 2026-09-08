@@ -45,7 +45,7 @@ func (s *synthesizer) Rationale(ctx context.Context, title, content, source stri
 			{"role": "user", "content": prompt},
 		},
 		"temperature": 0.3,
-		"max_tokens":  60,
+		"max_tokens":  300,
 	})
 	if err != nil {
 		return "", err
@@ -60,6 +60,10 @@ func (s *synthesizer) Rationale(ctx context.Context, title, content, source stri
 	if s.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+s.apiKey)
 	}
+	// The OpenCode Go endpoint requires a session header to route
+	// requests (400 MissingSessionID otherwise). A stable value is
+	// enough — it identifies the client, not a per-user session.
+	req.Header.Set("x-opencode-session", "personal-radar")
 
 	res, err := s.client.Do(req)
 	if err != nil {
@@ -74,8 +78,7 @@ func (s *synthesizer) Rationale(ctx context.Context, title, content, source stri
 	var parsed struct {
 		Choices []struct {
 			Message struct {
-				Content          string `json:"content"`
-				ReasoningContent string `json:"reasoning_content"`
+				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -86,10 +89,13 @@ func (s *synthesizer) Rationale(ctx context.Context, title, content, source stri
 		return "", fmt.Errorf("synthesis: empty choices")
 	}
 	result := parsed.Choices[0].Message.Content
-	// Some reasoning models (e.g. glm-5.3) emit the answer in
-	// reasoning_content and leave content empty.
+	// Reasoning models (deepseek-v4-flash, glm) stream their draft
+	// into reasoning_content and the actual answer into content.
+	// The reasoning draft is never user-facing: if content is empty
+	// (budget exhausted mid-thought), drop the line entirely rather
+	// than leaking the model's inner monologue into the briefing.
 	if result == "" {
-		result = parsed.Choices[0].Message.ReasoningContent
+		return "", nil
 	}
 	return cleanRationale(result), nil
 }

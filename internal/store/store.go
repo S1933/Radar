@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/S1933/personal-radar/internal/db"
@@ -18,10 +17,6 @@ type Store struct {
 }
 
 func New(d *db.DB) *Store { return &Store{db: d} }
-
-// ErrNotFound is returned by single-row mutations (MarkRead, MarkUnread,
-// MarkLiked) when the target id does not exist. The web API maps it to 404.
-var ErrNotFound = errors.New("not found")
 
 // InsertItem stores a normalized item. Returns the item id and true when the
 // row was newly inserted (false = duplicate source+source_id, merged).
@@ -163,7 +158,7 @@ func (s *Store) TopScoredItems(ctx context.Context, since time.Duration, limit i
 		SELECT i.id, i.source, i.source_id, i.url, i.canonical_url, i.author,
 		       i.title, i.content, i.published_at, i.topics, i.engagement,
 		       s.importance, s.relevance, s.novelty, s.actionability,
-		       s.personalization, s.final_score, s.model
+		       s.final_score, s.model
 		FROM items i
 		JOIN scores s ON s.item_id = i.id
 		WHERE i.collected_at > now() - make_interval(secs => $1)
@@ -181,7 +176,7 @@ func (s *Store) TopScoredItems(ctx context.Context, since time.Duration, limit i
 		if err := rows.Scan(&it.DBID, &it.Source, &it.SourceID, &it.URL, &it.CanonicalURL,
 			&it.Author, &it.Title, &it.Content, &published, pqArray(&it.Topics), &it.Engagement,
 			&it.Score.Importance, &it.Score.Relevance, &it.Score.Novelty, &it.Score.Actionability,
-			&it.Score.Personalization, &it.Score.Final, &it.Score.Model); err != nil {
+			&it.Score.Final, &it.Score.Model); err != nil {
 			return nil, err
 		}
 		if published.Valid {
@@ -211,13 +206,12 @@ type ScoredItem struct {
 
 // Score mirrors the scores table.
 type Score struct {
-	Importance      float64
-	Relevance       float64
-	Novelty         float64
-	Actionability   float64
-	Personalization float64
-	Final           float64
-	Model           string
+	Importance    float64
+	Relevance     float64
+	Novelty       float64
+	Actionability float64
+	Final         float64
+	Model         string
 }
 
 func (s *Store) queryItems(ctx context.Context, query string, args ...any) ([]ScoredItem, error) {
@@ -247,50 +241,19 @@ func (s *Store) queryItems(ctx context.Context, query string, args ...any) ([]Sc
 func (s *Store) SaveScore(ctx context.Context, itemID int64, sc Score) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO scores (item_id, importance, relevance, novelty, actionability,
-		                    personalization, final_score, model)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		                    final_score, model)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (item_id) DO UPDATE SET
 		    importance = EXCLUDED.importance,
 		    relevance = EXCLUDED.relevance,
 		    novelty = EXCLUDED.novelty,
 		    actionability = EXCLUDED.actionability,
-		    personalization = EXCLUDED.personalization,
 		    final_score = EXCLUDED.final_score,
 		    model = EXCLUDED.model,
 		    created_at = now()`,
 		itemID, sc.Importance, sc.Relevance, sc.Novelty, sc.Actionability,
-		sc.Personalization, sc.Final, sc.Model)
+		sc.Final, sc.Model)
 	return err
-}
-
-// AddFeedback records a user action on an item.
-func (s *Store) AddFeedback(ctx context.Context, itemID int64, action string) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO feedback (item_id, action) VALUES ($1,$2)`, itemID, action)
-	return err
-}
-
-// FeedbackCounts returns action -> count for recent feedback, used by the
-// personalization layer.
-func (s *Store) FeedbackCounts(ctx context.Context, sinceDays int) (map[string]int, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT action, count(*) FROM feedback
-		WHERE created_at > now() - ($1 || ' days')::interval
-		GROUP BY action`, sinceDays)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]int{}
-	for rows.Next() {
-		var a string
-		var c int
-		if err := rows.Scan(&a, &c); err != nil {
-			return nil, err
-		}
-		out[a] = c
-	}
-	return out, rows.Err()
 }
 
 // SaveBriefing stores the daily briefing content.
@@ -329,304 +292,4 @@ func (s *Store) SaveFeedState(ctx context.Context, name, etag, lastModified stri
 		    last_modified = EXCLUDED.last_modified, last_fetched = now()`,
 		name, etag, lastModified)
 	return err
-}
-
-// PreferenceWeight reads a personalization weight (0 when unknown).
-func (s *Store) PreferenceWeight(ctx context.Context, kind, name string) (float64, error) {
-	var w float64
-	err := s.db.QueryRowContext(ctx,
-		`SELECT weight FROM user_preferences WHERE kind = $1 AND name = $2`, kind, name).Scan(&w)
-	if err == sql.ErrNoRows {
-		return 0, nil
-	}
-	return w, err
-}
-
-// AdjustPreference applies delta to a preference weight (clamped to [-3, 3]).
-func (s *Store) AdjustPreference(ctx context.Context, kind, name string, delta float64) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO user_preferences (kind, name, weight) VALUES ($1,$2,$3)
-		ON CONFLICT (kind, name) DO UPDATE SET
-		    weight = LEAST(3, GREATEST(-3, user_preferences.weight + $3))`,
-		kind, name, delta)
-	return err
-}
-
-// AllPreferences returns every stored preference weight.
-func (s *Store) AllPreferences(ctx context.Context) (map[string]map[string]float64, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT kind, name, weight FROM user_preferences`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]map[string]float64{}
-	for rows.Next() {
-		var kind, name string
-		var w float64
-		if err := rows.Scan(&kind, &name, &w); err != nil {
-			return nil, err
-		}
-		if out[kind] == nil {
-			out[kind] = map[string]float64{}
-		}
-		out[kind][name] = w
-	}
-	return out, rows.Err()
-}
-
-// Bookmark is the dashboard projection: an item joined with its score, plus
-// the user-facing bookmark/read/liked flags.
-type Bookmark struct {
-	DBID         int64     `json:"id"`
-	Source       string    `json:"source"`
-	Title        string    `json:"title"`
-	URL          string    `json:"url"`
-	CanonicalURL string    `json:"canonical_url"`
-	Author       string    `json:"author"`
-	PublishedAt  time.Time `json:"published_at"`
-	CollectedAt  time.Time `json:"collected_at"`
-	Content      string    `json:"content"`
-	Topics       []string  `json:"topics"`
-	FinalScore   float64   `json:"final_score"`
-	IsRead       bool      `json:"is_read"`
-	IsLiked      bool      `json:"is_liked"`
-	IsPinned     bool      `json:"is_pinned"`
-	// SummaryTitle is the French one-line headline generated by the LLM
-	// at ingestion time. The dashboard renders it as the clickable card
-	// title; empty when the LLM was disabled or failed.
-	SummaryTitle string `json:"summary_title"`
-	// SummaryPoints is the bullet list (newline-separated in DB), parsed
-	// back into a slice for the dashboard. Empty when no summary exists.
-	SummaryPoints []string `json:"summary_points"`
-}
-
-// MarkBookmarked flags the given item ids as bookmarked. Idempotent. Used by
-// the briefing pipeline after a successful delivery so the dashboard stays
-// in sync with what was actually surfaced to the user.
-func (s *Store) MarkBookmarked(ctx context.Context, ids []int64) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE items SET is_bookmarked = TRUE
-		WHERE id = ANY($1) AND is_bookmarked = FALSE`, int64Array(ids))
-	return err
-}
-
-// MarkRead toggles the read flag on a single item. Returns ErrNotFound when
-// the id does not exist so the web API can surface 404 cleanly.
-func (s *Store) MarkRead(ctx context.Context, id int64) error {
-	return s.setReadFlag(ctx, id, true)
-}
-
-// MarkUnread clears the read flag on a single item.
-func (s *Store) MarkUnread(ctx context.Context, id int64) error {
-	return s.setReadFlag(ctx, id, false)
-}
-
-// MarkAllRead marks every bookmarked item as read. Returns the number of
-// items actually updated (only those that were previously unread count).
-func (s *Store) MarkAllRead(ctx context.Context) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE items SET is_read = TRUE WHERE is_bookmarked = TRUE AND is_read = FALSE`)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
-}
-
-func (s *Store) setReadFlag(ctx context.Context, id int64, v bool) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE items SET is_read = $1 WHERE id = $2`, v, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// MarkLiked flags an item as liked (the dashboard Like button). Likes are
-// the primary personalization signal — see personalization.Apply.
-func (s *Store) MarkLiked(ctx context.Context, id int64) error {
-	return s.setLikedFlag(ctx, id, true)
-}
-
-// MarkUnliked clears the liked flag.
-func (s *Store) MarkUnliked(ctx context.Context, id int64) error {
-	return s.setLikedFlag(ctx, id, false)
-}
-
-func (s *Store) setLikedFlag(ctx context.Context, id int64, v bool) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE items SET is_liked = $1 WHERE id = $2`, v, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// MarkPinned flags an item as pinned AND liked+read: pinning means the
-// item was analysed and kept aside, so it implies liking and reading.
-func (s *Store) MarkPinned(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE items SET is_pinned = TRUE, is_liked = TRUE, is_read = TRUE WHERE id = $1`, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// MarkUnpinned clears only the pinned flag (liked+read stay, so the item
-// returns to the "liked" view).
-func (s *Store) MarkUnpinned(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE items SET is_pinned = FALSE WHERE id = $1`, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// BookmarkFilter narrows ListBookmarks to a read state.
-type BookmarkFilter string
-
-const (
-	BookmarkUnread BookmarkFilter = "unread"
-	BookmarkRead   BookmarkFilter = "read"
-	BookmarkLiked  BookmarkFilter = "liked"
-	BookmarkPinned BookmarkFilter = "pinned"
-	BookmarkAll    BookmarkFilter = "all"
-)
-
-// ListBookmarks returns the dashboard projection ordered by collection time
-// (newest first). The default filter is "unread" — the most common view.
-func (s *Store) ListBookmarks(ctx context.Context, filter BookmarkFilter, limit, offset int) ([]Bookmark, int, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	if filter == "" {
-		filter = BookmarkUnread
-	}
-
-	var whereClause string
-	switch filter {
-	case BookmarkUnread:
-		whereClause = "WHERE i.is_bookmarked = TRUE AND i.is_read = FALSE"
-	case BookmarkRead:
-		whereClause = "WHERE i.is_bookmarked = TRUE AND i.is_read = TRUE"
-	case BookmarkLiked:
-		whereClause = "WHERE i.is_bookmarked = TRUE AND i.is_liked = TRUE AND i.is_pinned = FALSE"
-	case BookmarkPinned:
-		whereClause = "WHERE i.is_bookmarked = TRUE AND i.is_pinned = TRUE"
-	default: // BookmarkAll
-		whereClause = "WHERE i.is_bookmarked = TRUE"
-	}
-
-	var total int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT count(*) FROM items i `+whereClause,
-	).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT i.id, i.source, i.title, i.url, i.canonical_url, i.author,
-		       i.published_at, i.collected_at, i.content, i.topics,
-		       COALESCE(s.final_score, 0), i.is_read, i.is_liked, i.is_pinned,
-		       COALESCE(i.summary_title, ''), COALESCE(i.summary_fr, '')
-		FROM items i
-		LEFT JOIN scores s ON s.item_id = i.id
-		`+whereClause+`
-		ORDER BY i.collected_at DESC
-		LIMIT $1 OFFSET $2`, limit, offset)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-
-	out := make([]Bookmark, 0, limit)
-	for rows.Next() {
-		var b Bookmark
-		var published sql.NullTime
-		var rawSummary string
-		if err := rows.Scan(&b.DBID, &b.Source, &b.Title, &b.URL, &b.CanonicalURL,
-			&b.Author, &published, &b.CollectedAt, &b.Content, pqArray(&b.Topics),
-			&b.FinalScore, &b.IsRead, &b.IsLiked, &b.IsPinned,
-			&b.SummaryTitle, &rawSummary); err != nil {
-			return nil, 0, err
-		}
-		if published.Valid {
-			b.PublishedAt = published.Time
-		}
-		// summary_fr is stored newline-delimited — same encoding used by
-		// SetSummaryFR. Skip empty lines so trailing newlines don't yield
-		// blank bullets.
-		for _, line := range strings.Split(rawSummary, "\n") {
-			if line = strings.TrimSpace(line); line != "" {
-				b.SummaryPoints = append(b.SummaryPoints, line)
-			}
-		}
-		out = append(out, b)
-	}
-	return out, total, rows.Err()
-}
-
-// SummaryFR returns the persisted French summary + title for an item
-// ("" if none). Used by the dashboard to skip LLM generation when a
-// summary already exists.
-func (s *Store) SummaryFR(ctx context.Context, id int64) (title, summary string, err error) {
-	err = s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(summary_title, ''), summary_fr FROM items WHERE id = $1`, id).Scan(&title, &summary)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", ErrNotFound
-	}
-	return title, summary, err
-}
-
-// SetSummaryFR persists a French summary (title + bullets) on an item.
-// Returns ErrNotFound when the id does not exist (dashboard maps this to 404).
-func (s *Store) SetSummaryFR(ctx context.Context, id int64, title, summary string) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE items SET summary_title = $1, summary_fr = $2 WHERE id = $3`, title, summary, id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
 }

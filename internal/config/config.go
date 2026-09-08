@@ -21,17 +21,12 @@ type Config struct {
 
 	Topics []string `yaml:"topics"`
 
-	RSS      RSSConfig      `yaml:"rss"`
-	Reddit   RedditConfig   `yaml:"reddit"`
-	GitHub   GitHubConfig   `yaml:"github"`
-	X        XConfig        `yaml:"x"`
-	LinkedIn LinkedInConfig `yaml:"linkedin"`
-
-	Telegram TelegramConfig `yaml:"telegram"`
+	RSS    RSSConfig    `yaml:"rss"`
+	Reddit RedditConfig `yaml:"reddit"`
+	GitHub GitHubConfig `yaml:"github"`
+	X      XConfig      `yaml:"x"`
 
 	Models ModelsConfig `yaml:"models"`
-
-	Obsidian ObsidianConfig `yaml:"obsidian"`
 }
 
 type DatabaseConfig struct {
@@ -92,10 +87,9 @@ func (d DatabaseConfig) DSN() string {
 type BriefingConfig struct {
 	Schedule  string   `yaml:"schedule"`  // single "07:00" (legacy)
 	Schedules []string `yaml:"schedules"` // multiple daily slots, e.g. ["08:00","14:00","20:00"]
-	Timezone  string   `yaml:"timezone"`   // overrides top-level timezone
+	Timezone  string   `yaml:"timezone"`  // overrides top-level timezone
 	MaxItems  int      `yaml:"max_items"`
 	MaxTrends int      `yaml:"max_trends"`
-	Send      bool     `yaml:"send"` // deliver via Telegram when true
 }
 
 type RSSConfig struct {
@@ -129,27 +123,11 @@ type XConfig struct {
 	Accounts    []string      `yaml:"accounts"`
 	Queries     []string      `yaml:"queries"`
 	Lists       []string      `yaml:"lists"` // X list IDs (x.com/i/lists/<id>) — followed live
-	APIKey      string        `yaml:"-"` // from env X_API_KEY
-	APISecret   string        `yaml:"-"` // from env X_API_SECRET
-	BearerToken string        `yaml:"-"` // from env X_BEARER_TOKEN
+	APIKey      string        `yaml:"-"`     // from env X_AUTH_TOKEN
+	APISecret   string        `yaml:"-"`     // from env X_CT0
+	BearerToken string        `yaml:"-"`     // from env X_BEARER_TOKEN
 	Limit       int           `yaml:"limit"`   // tweets per account / query / list
 	Timeout     time.Duration `yaml:"timeout"` // sidecar invocation budget
-}
-
-type LinkedInConfig struct {
-	Enabled bool           `yaml:"enabled"`
-	Pages   []LinkedInPage `yaml:"pages"`
-}
-
-type LinkedInPage struct {
-	Name string `yaml:"name"`
-	URL  string `yaml:"url"`
-}
-
-type TelegramConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	ChatID      string `yaml:"chat_id"`
-	AdminChatID string `yaml:"admin_chat_id"`
 }
 
 type ModelsConfig struct {
@@ -159,17 +137,11 @@ type ModelsConfig struct {
 	Filter  ModelConfig `yaml:"filter"`
 	Rank    ModelConfig `yaml:"rank"`
 	Synth   ModelConfig `yaml:"synthesis"`
-	DeepDive ModelConfig `yaml:"deepdive"`
 }
 
 type ModelConfig struct {
 	Model     string `yaml:"model"`
 	MaxTokens int    `yaml:"max_tokens"`
-}
-
-type ObsidianConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	VaultPath string `yaml:"vault_path"`
 }
 
 func envOr(key, def string) string {
@@ -190,7 +162,6 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.defaults()
-	applyEnvOverrides(cfg)
 	// Secrets come from the environment (never from YAML), matching the
 	// database credential pattern. OPENAI_API_KEY feeds the LLM stage.
 	if cfg.Models.APIKey == "" {
@@ -213,17 +184,6 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.X.BearerToken = os.Getenv("X_BEARER_TOKEN")
 	}
 	return cfg, nil
-}
-
-// Override host paths at runtime via env vars. The YAML is mounted
-// read-only and carries operator-specific paths; the container layout
-// differs (e.g. /data/obsidian is a bind-mounted vault). Without this
-// override, /save would write into the container's ephemeral filesystem
-// and disappear on the next restart.
-func applyEnvOverrides(cfg *Config) {
-	if v := envOr("RADAR_OBSIDIAN_VAULT", ""); v != "" {
-		cfg.Obsidian.VaultPath = v
-	}
 }
 
 func (c *Config) defaults() {

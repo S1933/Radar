@@ -9,7 +9,6 @@ import (
 
 	"github.com/S1933/personal-radar/internal/briefing"
 	"github.com/S1933/personal-radar/internal/collectors/github"
-	"github.com/S1933/personal-radar/internal/collectors/linkedin"
 	"github.com/S1933/personal-radar/internal/collectors/reddit"
 	"github.com/S1933/personal-radar/internal/collectors/rss"
 	"github.com/S1933/personal-radar/internal/collectors/x"
@@ -17,52 +16,24 @@ import (
 	"github.com/S1933/personal-radar/internal/db"
 	"github.com/S1933/personal-radar/internal/ingestion"
 	"github.com/S1933/personal-radar/internal/logging"
-	"github.com/S1933/personal-radar/internal/personalization"
 	"github.com/S1933/personal-radar/internal/ranking"
 	"github.com/S1933/personal-radar/internal/scheduler"
 	"github.com/S1933/personal-radar/internal/store"
-	"github.com/S1933/personal-radar/internal/summary"
-	"github.com/S1933/personal-radar/internal/telegram"
-	"github.com/S1933/personal-radar/internal/web"
 )
 
 // App wires every component of the radar together. It owns the database
-// pool and the lifecycle of long-running workers (scheduler, telegram).
-// ingestionSummarizerAdapter bridges summary.Service (concrete type with
-// a richer signature) and the narrow ingestion.Summarizer interface. It
-// exists only so the app wiring doesn't have to declare one more
-// dependency type — the actual conversion is trivial.
-type ingestionSummarizerAdapter struct{ svc *summary.Service }
-
-func (a *ingestionSummarizerAdapter) Enabled() bool { return a.svc.Enabled() }
-
-func (a *ingestionSummarizerAdapter) Summarize(
-	ctx context.Context, id int64, title, content, source string, existing ingestion.ExistingSummary,
-) (string, []string, error) {
-	sg, err := a.svc.Summarize(ctx, id, title, content, source, summary.Summary{
-		Title:  existing.Title,
-		Points: existing.Points,
-	})
-	if err != nil {
-		return "", nil, err
-	}
-	return sg.Title, sg.Points, nil
-}
-
+// pool and the lifecycle of the scheduler. There is no user-facing
+// surface in here anymore: the chat agent (Hermes) reads the Postgres
+// data directly (items, briefings) and handles every interaction.
 type App struct {
-	Cfg *config.Config
-	Log *logging.Logger
-
-	DB        *db.DB
-	Store     *store.Store
-	Ingest    *ingestion.Service
-	Ranker    *ranking.Service
-	Prefs     *personalization.Service
+	Cfg   *config.Config
+	Log   *logging.Logger
+	DB    *db.DB
+	Store *store.Store
+	Ingest *ingestion.Service
+	Ranker  *ranking.Service
 	Briefer   *briefing.Service
-	Telegram  *telegram.Client
 	Scheduler *scheduler.Scheduler
-	DeepDive    *DeepDive
-	Summary     *summary.Service
 }
 
 // New builds the App: opens the DB pool and wires services. Collectors are
@@ -75,7 +46,6 @@ func New(ctx context.Context, cfg *config.Config, log *logging.Logger) (*App, er
 	st := store.New(database)
 
 	ranker := ranking.New(cfg.Models, st, log.With("sub", "ranking"))
-	prefs := personalization.New(st)
 
 	briefer := briefing.New(briefing.Options{
 		MaxItems:  cfg.Briefing.MaxItems,
@@ -83,53 +53,18 @@ func New(ctx context.Context, cfg *config.Config, log *logging.Logger) (*App, er
 		Location:  cfg.Location(),
 	}, st, ranker, log.With("sub", "briefing"))
 
-	var tg *telegram.Client
-	if cfg.Telegram.Enabled {
-		tg, err = telegram.NewClient(cfg.Telegram, log.With("sub", "telegram"))
-		if err != nil {
-			// Non-fatal: collect/rank/migrate must work without Telegram.
-			log.Warn("telegram disabled", "error", err.Error())
-			tg = nil
-		} else {
-			briefer.SetTelegram(tg)
-		}
-	}
+	svc := ingestion.New(st, log.With("sub", "ingestion"))
 
-	// Summarizer generates the French recap attached to every ingested
-	// item. Sharing the same instance between ingestion and the web layer
-	// keeps the in-memory cache hot (the web /api/summary fallback reads
-	// it before going to the DB). Constructed once and reused.
-	summ := summary.New(cfg.Models)
-	ingSumm := &ingestionSummarizerAdapter{svc: summ}
-
-	svc := ingestion.New(st, log.With("sub", "ingestion"), ingSumm, st)
-
-	app := &App{
+	return &App{
 		Cfg:       cfg,
 		Log:       log,
 		DB:        database,
 		Store:     st,
 		Ingest:    svc,
 		Ranker:    ranker,
-		Prefs:     prefs,
 		Briefer:   briefer,
-		Telegram:  tg,
 		Scheduler: scheduler.New(log.With("sub", "scheduler")),
-		DeepDive:  NewDeepDive(cfg.Models),
-		Summary:   summ,
-	}
-
-	// A misconfigured vault makes /save write into the container's
-	// ephemeral filesystem: the user gets "archivé" and everything
-	// vanishes on restart. A boot-time warning beats a quiet data loss.
-	if cfg.Obsidian.Enabled && cfg.Obsidian.VaultPath != "" {
-		if fi, err := os.Stat(cfg.Obsidian.VaultPath); err != nil || !fi.IsDir() {
-			log.Warn("obsidian vault path is not a directory — /save will write to ephemeral storage",
-				"path", cfg.Obsidian.VaultPath, "error", err)
-		}
-	}
-
-	return app, nil
+	}, nil
 }
 
 // Close releases resources held by the app (DB pool).
@@ -192,7 +127,7 @@ func (a *App) collectors(ctx context.Context) []ingestion.Collector {
 			out = append(out, c)
 		} else {
 			// No OAuth credentials: fall back to the public RSS adapter
-			// (best-effort, same pattern as LinkedIn public pages).
+			// (best-effort).
 			a.Log.Warn("reddit oauth unavailable, using public adapter", "error", err.Error())
 			out = append(out, reddit.NewPublicCollector(a.Cfg.Reddit, a.Log.With("sub", "reddit-public")))
 		}
@@ -203,9 +138,6 @@ func (a *App) collectors(ctx context.Context) []ingestion.Collector {
 		} else {
 			a.Log.Warn("github disabled for this cycle", "error", err)
 		}
-	}
-	if a.Cfg.LinkedIn.Enabled && len(a.Cfg.LinkedIn.Pages) > 0 {
-		out = append(out, linkedin.NewCollector(a.Cfg.LinkedIn, a.Log.With("sub", "linkedin")))
 	}
 	if a.Cfg.X.Enabled && (len(a.Cfg.X.Accounts) > 0 || len(a.Cfg.X.Queries) > 0) {
 		py := os.Getenv("X_PYTHON")
@@ -310,60 +242,13 @@ func (a *App) RankPending(ctx context.Context) (int, error) {
 	return a.Ranker.RankPending(ctx)
 }
 
-// Briefing generates (and sends when configured) the daily briefing.
+// Briefing generates the daily briefing and persists it (no delivery —
+// the chat agent picks it up from the briefings table).
 func (a *App) Briefing(ctx context.Context) (string, error) {
-	return a.Briefer.Generate(ctx, briefing.SendOption(a.Cfg.Briefing.Send))
+	return a.Briefer.Generate(ctx)
 }
 
-// WebAddr is the bind address for the bookmark dashboard (default
-// 127.0.0.1:8081). Override with RADAR_WEB_ADDR in the environment.
-func WebAddr() string {
-	if v := os.Getenv("RADAR_WEB_ADDR"); v != "" {
-		return v
-	}
-	return "127.0.0.1:8081"
-}
-
-// StartWeb launches the bookmark dashboard. Blocks until ctx is canceled.
-// Use Run() if you want the scheduler + telegram + web all together;
-// StartWeb is for `radar web` (dashboard-only mode).
-func (a *App) StartWeb(ctx context.Context) error {
-	// The summarizer is wired from the same models config as the briefing
-	// synthesizer. When no LLM is configured it stays disabled and the
-	// dashboard falls back to content excerpts — the web server remains
-	// fully functional without it.
-	// The summarizer is the same instance used by ingestion to populate
-	// summary_fr at collect-time. Reusing it here keeps the in-memory
-	// cache hot and avoids reconstructing the http.Client.
-	srv := web.New(web.Config{
-		Addr:       WebAddr(),
-		Summarizer: a.Summary,
-		// Dashboard likes feed the same personalization preferences as the
-		// Telegram 👍/🔥 reactions, so the ranking pipeline boosts future
-		// items sharing topics/sources/authors with liked ones.
-		OnLike: func(ctx context.Context, itemID int64, liked bool) {
-			action := "thumbs_down"
-			if liked {
-				action = "thumbs_up"
-			}
-			if err := personalization.Apply(ctx, a.Prefs, itemID, action); err != nil {
-				a.Log.Warn("apply like preference", "id", itemID, "error", err)
-			}
-		},
-	}, a.Store, a.Log.With("sub", "web"))
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Start() }()
-	select {
-	case <-ctx.Done():
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return srv.Stop(shutCtx)
-	case err := <-errCh:
-		return err
-	}
-}
-
-// Run starts the scheduler (collection + briefing) and the telegram listener.
+// Run starts the scheduler (collection + briefing).
 func (a *App) Run(ctx context.Context) error {
 	// Apply migrations at boot so fresh deployments work without manual steps.
 	if err := a.Migrate(ctx); err != nil {
@@ -393,7 +278,8 @@ func (a *App) Run(ctx context.Context) error {
 		})
 	}
 	// Briefing: one job per daily slot (default single 07:00, or the
-	// configured schedules list). Each slot generates + sends the briefing.
+	// configured schedules list). Each slot generates and persists the
+	// briefing; delivery is the chat agent's job.
 	slots := briefingSlots(a.Cfg.Briefing.Schedules, a.Cfg.Briefing.Schedule)
 	for i, slot := range slots {
 		s := slot // capture loop var
@@ -401,7 +287,7 @@ func (a *App) Run(ctx context.Context) error {
 			DailyAt: s,
 			Loc:     a.Cfg.Location(),
 			Run: func(ctx context.Context) {
-				if _, err := a.Briefer.Generate(ctx, briefing.SendOption(true)); err != nil {
+				if _, err := a.Briefer.Generate(ctx); err != nil {
 					a.Log.Error("briefing", "slot", s, "error", err)
 				}
 			},
@@ -409,9 +295,6 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	a.Scheduler.Start(ctx)
 
-	if a.Telegram != nil {
-		return a.Telegram.Listen(ctx, a.TelegramHandlers())
-	}
 	<-ctx.Done()
 	return nil
 }

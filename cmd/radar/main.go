@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/S1933/personal-radar/internal/app"
 	"github.com/S1933/personal-radar/internal/config"
@@ -85,22 +84,10 @@ func main() {
 			os.Exit(1)
 		}
 
-	case "web":
-		// Bookmark dashboard only (no scheduler, no telegram). Useful for
-		// running the dashboard on a separate process / port from the main
-		// radar. Listens on 127.0.0.1:8081 by default; override via
-		// RADAR_WEB_ADDR.
-		if err := a.StartWeb(ctx); err != nil && ctx.Err() == nil {
-			log.Error("web", "error", err)
-			os.Exit(1)
-		}
-
 	default:
 		usage()
 		os.Exit(2)
 	}
-
-	_ = time.Now // keep import if usage trimmed
 }
 
 func usage() {
@@ -111,8 +98,7 @@ commands:
   migrate    apply database migrations
   collect    run one collection cycle across all enabled collectors
   rank       score pending items
-  briefing   generate and deliver the daily briefing
-  run        start scheduler + telegram listener
-  web        start the bookmark dashboard only (127.0.0.1:8081)
+  briefing   generate the daily briefing (persisted in the briefings table)
+  run        start the scheduler (collect + briefing slots)
 `))
 }

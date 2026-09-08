@@ -89,14 +89,15 @@ func (s *llmScorer) Score(ctx context.Context, it store.ScoredItem) (store.Score
 		return store.Score{}, fmt.Errorf("llm rank: parse json: %w", err)
 	}
 
-	return store.Score{
+	sc := store.Score{
 		Importance:    clamp(out.Importance, 0, 10),
 		Relevance:     clamp(out.PersonalRelevance, 0, 10),
 		Novelty:       clamp(out.Novelty, 0, 10),
 		Actionability: clamp(out.Actionability, 0, 10),
 		Model:         s.cfg.Rank.Model,
-		Final: weightedScore(clamp(out.PersonalRelevance, 0, 10), clamp(out.Importance, 0, 10), clamp(out.Novelty, 0, 10), clamp(out.Actionability, 0, 10), 0),
-	}, nil
+	}
+	sc.Final = weightedScore(sc)
+	return sc, nil
 }
 
 func buildRankPrompt(it store.ScoredItem) string {
@@ -111,6 +112,9 @@ func buildRankPrompt(it store.ScoredItem) string {
 		it.Title, it.Source, engagement, textutil.Truncate(it.Content, 1200, "…"))
 }
 
-func weightedScore(rel, imp, nov, act, pers float64) float64 {
-	return rel*Weights.Relevance + imp*Weights.Importance + nov*Weights.Novelty + act*Weights.Actionability + pers*Weights.Personalization
+func weightedScore(sc store.Score) float64 {
+	return sc.Relevance*Weights.Relevance +
+		sc.Importance*Weights.Importance +
+		sc.Novelty*Weights.Novelty +
+		sc.Actionability*Weights.Actionability
 }

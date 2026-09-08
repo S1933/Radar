@@ -14,12 +14,11 @@ import (
 
 // Weights of the final score. Configurable in future config revisions.
 var Weights = struct {
-	Relevance       float64
-	Importance      float64
-	Novelty         float64
-	Actionability   float64
-	Personalization float64
-}{0.40, 0.25, 0.15, 0.10, 0.10}
+	Relevance     float64
+	Importance    float64
+	Novelty       float64
+	Actionability float64
+}{0.40, 0.25, 0.15, 0.20}
 
 // Service scores unscored items. POC uses a deterministic heuristic scorer;
 // an LLM stage can be plugged via Scorer.
@@ -61,7 +60,6 @@ func (s *Service) RankPending(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	prefs, _ := s.store.AllPreferences(ctx)
 
 	var n int
 	for _, it := range items {
@@ -73,7 +71,6 @@ func (s *Service) RankPending(ctx context.Context) (int, error) {
 			s.log.Warn("score item (llm failed, heuristic fallback)", "id", it.DBID, "error", err)
 			sc, _ = newHeuristicScorer().Score(ctx, it)
 		}
-		sc.Personalization = personalizationScore(it, prefs)
 		sc.Final = finalScore(sc)
 		// Bump on every change of formula — the model tag is
 		// what lets us invalidate stale scores via
@@ -98,43 +95,14 @@ func finalScore(sc store.Score) float64 {
 	return sc.Relevance*Weights.Relevance +
 		sc.Importance*Weights.Importance +
 		sc.Novelty*Weights.Novelty +
-		sc.Actionability*Weights.Actionability +
-		sc.Personalization*Weights.Personalization
-}
-
-func personalizationScore(it store.ScoredItem, prefs map[string]map[string]float64) float64 {
-	if len(prefs) == 0 {
-		return 0
-	}
-	var sum float64
-	var count int
-	for _, t := range it.Topics {
-		if w, ok := prefs["topic"][t]; ok {
-			sum += w
-			count++
-		}
-	}
-	if w, ok := prefs["source"][it.Source]; ok {
-		sum += w
-		count++
-	}
-	if it.Author != "" {
-		if w, ok := prefs["author"][it.Author]; ok {
-			sum += w
-			count++
-		}
-	}
-	if count == 0 {
-		return 0
-	}
-	return clamp(sum/float64(count), -1, 1)
+		sc.Actionability*Weights.Actionability
 }
 
 func clamp(v, lo, hi float64) float64 { return math.Max(lo, math.Min(hi, v)) }
 
 // heuristicScorer computes deterministic sub-scores from item fields.
 type heuristicScorer struct {
-	bm25         *bm25
+	bm25          *bm25
 	topicKeywords map[string][]string // exposed for tests
 }
 

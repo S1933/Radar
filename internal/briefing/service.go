@@ -3,7 +3,6 @@ package briefing
 import (
 	"context"
 	"fmt"
-	"html"
 	"sort"
 	"strings"
 	"time"
@@ -20,22 +19,15 @@ type Options struct {
 	Location  *time.Location
 }
 
-// sendOption is toggled by SendOption.
-type sendKey struct{}
-
-// Service generates the daily briefing markdown.
+// Service generates the daily briefing markdown. Delivery is not the
+// briefing's job anymore: the content is persisted in the briefings table
+// and the chat agent (Hermes) reads it from there and posts it to Discord.
 type Service struct {
-	opts     Options
-	store    *store.Store
-	ranker   *ranking.Service
-	synth    *synthesizer
-	log      *logging.Logger
-	telegram Sender
-}
-
-// Sender delivers the briefing (telegram client).
-type Sender interface {
-	Send(ctx context.Context, text string) error
+	opts   Options
+	store  *store.Store
+	ranker *ranking.Service
+	synth  *synthesizer
+	log    *logging.Logger
 }
 
 func New(opts Options, st *store.Store, ranker *ranking.Service, log *logging.Logger) *Service {
@@ -47,16 +39,13 @@ func New(opts Options, st *store.Store, ranker *ranking.Service, log *logging.Lo
 	return s
 }
 
-func (s *Service) SetTelegram(tg Sender) { s.telegram = tg }
+// drainPendingBatches caps the RankPending loop: UnscoredItems is capped
+// (150/query), so the queue is drained in batches — but a runaway loop
+// would spin forever if scoring keeps failing without erroring.
+const drainPendingBatches = 5
 
-// SendOption returns a context value enabling actual delivery.
-func SendOption(send bool) context.Context {
-	return context.WithValue(context.Background(), sendKey{}, send)
-}
-
-// Generate builds the briefing over the last 24h. When the ctx carries
-// SendOption(true), the briefing is also delivered via Telegram.
-func (s *Service) Generate(ctx context.Context, opts ...context.Context) (string, error) {
+// Generate builds the briefing over the last 24h and persists it.
+func (s *Service) Generate(ctx context.Context) (string, error) {
 	// T13: record the run for observability. items_collected counts
 	// what made it into the message, items_failed is 0 for the
 	// briefing (errors surface as the returned err below).
@@ -71,10 +60,7 @@ func (s *Service) Generate(ctx context.Context, opts ...context.Context) (string
 	}()
 
 	// Rank anything pending first so the selection is fresh.
-	// UnscoredItems is capped (150/query), so loop until the queue is
-	// drained — otherwise a large backlog would take several briefings
-	// to get scored and would never surface in the selection.
-	for i := 0; i < 5; i++ {
+	for i := 0; i < drainPendingBatches; i++ {
 		n, err := s.ranker.RankPending(ctx)
 		if err != nil {
 			s.log.Warn("rank before briefing", "error", err)
@@ -102,11 +88,8 @@ func (s *Service) Generate(ctx context.Context, opts ...context.Context) (string
 	// a Trello-style "one column is not allowed to eat the whole board".
 	selected := applySourceQuota(items, s.opts.MaxItems)
 
-	// Dedupe by title before ids are computed: ids was previously
-	// calculated before the dedup-by-title inside render(), so
-	// MarkBookmarked tagged items that were dropped from the
-	// message — the comment claimed otherwise. Hoisting the dedup
-	// here makes the bookmarked set exactly what was sent.
+	// Dedupe by title before ids are computed so the persisted item_ids
+	// match exactly what the reader sees.
 	selected = dedupeByTitle(selected)
 	selectedCount = len(selected)
 
@@ -121,25 +104,6 @@ func (s *Service) Generate(ctx context.Context, opts ...context.Context) (string
 	}
 	if err := s.store.SaveBriefing(ctx, date, content, ids); err != nil {
 		s.log.Warn("save briefing", "error", err)
-	}
-
-	// Auto-bookmark every item that made it into the briefing. The web
-	// dashboard surfaces this list (with read/unread/delete). Dedupe-by-title
-	// in render() may drop some ids; mark only the ones that actually
-	// reached the message.
-	if err := s.store.MarkBookmarked(ctx, ids); err != nil {
-		s.log.Warn("auto-bookmark", "error", err)
-	}
-
-	// Delivery when requested via SendOption.
-	if len(opts) > 0 {
-		if send, _ := opts[0].Value(sendKey{}).(bool); send && s.telegram != nil {
-			if err := s.telegram.Send(ctx, content); err != nil {
-				s.log.Error("send briefing", "error", err)
-			} else {
-				s.log.Info("briefing sent", "items", len(selected))
-			}
-		}
 	}
 	return content, nil
 }
@@ -244,8 +208,7 @@ func applySourceQuota(items []store.ScoredItem, max int) []store.ScoredItem {
 // dedupeByTitle collapses items whose normalized titles are identical —
 // typically the same story surfaced by two collectors, or a tweet picked
 // up twice. The first occurrence wins, so the score ordering is
-// preserved. Hoisted from render() so the ids fed to MarkBookmarked
-// match what actually reaches the reader.
+// preserved.
 func dedupeByTitle(items []store.ScoredItem) []store.ScoredItem {
 	seen := make(map[string]bool, len(items))
 	out := make([]store.ScoredItem, 0, len(items))
@@ -291,9 +254,7 @@ func (s *Service) detectTrends(items []store.ScoredItem) []string {
 	var out []string
 	for _, c := range clusters {
 		if c.count >= 3 && len(out) < s.opts.MaxTrends {
-			// Escape the title at construction time: render() is
-			// already escaped, and escaping twice corrupts "•".
-			out = append(out, fmt.Sprintf("• %s (%d sources)", escapeHTML(c.titles[0]), c.count))
+			out = append(out, fmt.Sprintf("• %s (%d sources)", c.titles[0], c.count))
 		}
 	}
 	return out
@@ -339,47 +300,43 @@ func (s *Service) loc() *time.Location {
 	return time.UTC
 }
 
+// render produces Discord-flavoured markdown: the briefing is persisted
+// in the DB and posted to a Discord channel by the chat agent. Markdown
+// replaces the old Telegram HTML parse mode; no escaping is needed
+// beyond keeping the URL raw inside the link syntax.
 func (s *Service) render(ctx context.Context, items []store.ScoredItem, trends []string) string {
 	var b strings.Builder
 	now := time.Now().In(s.loc())
-	fmt.Fprintf(&b, "☀️ <b>DAILY RADAR</b>\n%s\n\n", now.Format("Monday 2 January 2006"))
+	fmt.Fprintf(&b, "☀️ **DAILY RADAR**\n%s\n\n", now.Format("Monday 2 January 2006"))
 
 	if len(items) == 0 {
 		b.WriteString("Rien de marquant aujourd'hui — calme plat.\n")
 		return b.String()
 	}
 
-	// De-duplication by title now happens upstream (in Generate via
-	// dedupeByTitle) so the bookmarked ids match what reaches the
-	// reader. render() iterates the items as given.
-	b.WriteString("🔥 <b>À NE PAS MANQUER</b>\n\n")
+	b.WriteString("🔥 **À NE PAS MANQUER**\n\n")
 	for i, it := range items {
 		icon := sourceIcon(it.Source)
-		// Both the URL and the title must be escaped: an unescaped "&"
-		// in a URL breaks the href, and a "_" or "*" in a title
-		// already breaks the entire message under Markdown v1 — the
-		// whole reason we moved to HTML.
-		fmt.Fprintf(&b, "%d. %s <a href=\"%s\"><b>%s</b></a>\n",
-			i+1, icon, escapeHTML(it.URL), escapeHTML(it.Title))
+		title := it.Title
+		if it.URL != "" {
+			fmt.Fprintf(&b, "%d. %s [%s](<%s>)\n", i+1, icon, title, it.URL)
+		} else {
+			fmt.Fprintf(&b, "%d. %s %s\n", i+1, icon, title)
+		}
 		// Optional LLM "why it matters" line (best-effort).
 		if s.synth != nil {
 			if why, err := s.synth.Rationale(ctx, it.Title, it.Content, it.Source); err == nil && why != "" {
-				fmt.Fprintf(&b, "   💡 %s\n", escapeHTML(why))
+				fmt.Fprintf(&b, "   💡 %s\n", why)
 			}
 		}
 	}
 
 	if len(trends) > 0 {
-		b.WriteString("\n🧠 <b>TENDANCES</b>\n\n")
+		b.WriteString("\n🧠 **TENDANCES**\n\n")
 		for _, t := range trends {
 			b.WriteString(t + "\n")
 		}
 	}
-
-	// Footer reflects the syntax that actually works after T4 (the
-	// reaction loop now reads the id from the message). Markdown
-	// backticks render as-is under HTML, no escape needed.
-	b.WriteString("\n💡 <i>Réponds 👍 12 / 👎 12 / 🔥 12 / 📌 12, ou /save 12, pour affiner le radar.</i>")
 	return b.String()
 }
 
@@ -411,12 +368,3 @@ func normTitle(t string) string {
 	}
 	return b.String()
 }
-
-// escapeHTML prepares arbitrary text for Telegram's HTML parse mode.
-// Telegram only requires &, < and > to be escaped, but html.EscapeString
-// also handles quotes — which matters inside href attributes.
-//
-// HTML is used instead of Markdown because Markdown v1 offers no escape
-// mechanism at all: a title containing "_" or "*" produced unbalanced
-// entities and a 400 from the API, losing the whole briefing.
-func escapeHTML(s string) string { return html.EscapeString(s) }
