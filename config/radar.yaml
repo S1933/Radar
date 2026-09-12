@@ -103,6 +103,8 @@ x:
     - cryptulien
     - BuildWithManu
     - yOyO38  # Yoan Bernabeu — open-source dev tooling (e.g. pronote-digest)
+    # NOTE: auto-managed — any X handle a user-linked tweet belongs to is appended
+    # below by the agent (radar-like-notifs / manual link likes). Do not dedupe by hand.
   queries:
     - "coding agent"
     - "AI agent framework"
