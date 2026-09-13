@@ -143,11 +143,11 @@ x:
     - mattpocockuk
     - opencode
     - steipete
+    - Dimillian  # auto-added: tweet link liked by user
     # NOTE: auto-managed — any X handle a user-linked tweet belongs to is appended
     # below by the agent (radar-like-notifs / manual link likes). Do not dedupe by hand.
   limit: 3    # tweets per account/query/list (52 accounts × 15 broke the rate budget and the 3m timeout)
   timeout: 6m # sidecar budget (parallel collector finishes in ~1-2 min; 6m is the safety net)
-    - Dimillian  # auto-added: tweet link liked by user
   queries:
     - "coding agent"
     - "AI agent framework"
