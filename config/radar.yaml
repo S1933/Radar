@@ -103,8 +103,51 @@ x:
     - cryptulien
     - BuildWithManu
     - yOyO38  # Yoan Bernabeu — open-source dev tooling (e.g. pronote-digest)
+    # new follows requested by user (2026-09-12)
+    - ChatGPT
+    - VaderResearch
+    - pollenrobotics
+    - IBuzovskyi
+    - Hesamation
+    - kloss_xyz
+    - mardehaym
+    - vasuman
+    - alex_prompter
+    - eptwts
+    - corbin_braun
+    - rileybrown
+    - gregisenberg
+    - DeRonin_
+    - Chlowcr9
+    - MatthewBerman
+    - minchoi
+    - MiniMax_AI
+    - altryne
+    - adrgrondin
+    - LocallyAIApp
+    - developedbyed
+    - Kimi_Moonshot
+    - antonin_garrone
+    - DFintelligence
+    - Alibaba_Qwen
+    - BHolmesDev
+    - UnderscoreTalk
+    - warpdotdev
+    - _StanGirard
+    - Abhinavstwt
+    - trq212
+    - marmaduke091
+    - chetaslua
+    - mntruell
+    - tom_doerr
+    - mattpocockuk
+    - opencode
+    - steipete
     # NOTE: auto-managed — any X handle a user-linked tweet belongs to is appended
     # below by the agent (radar-like-notifs / manual link likes). Do not dedupe by hand.
+  limit: 3    # tweets per account/query/list (52 accounts × 15 broke the rate budget and the 3m timeout)
+  timeout: 6m # sidecar budget (parallel collector finishes in ~1-2 min; 6m is the safety net)
+    - Dimillian  # auto-added: tweet link liked by user
   queries:
     - "coding agent"
     - "AI agent framework"
