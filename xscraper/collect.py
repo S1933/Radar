@@ -30,6 +30,10 @@ from twscrape import API
 # block the whole cycle — keep it gentle (3).
 SEM = asyncio.Semaphore(3)
 
+# Auth probe budget: a healthy session answers a user lookup in <1s. Keep it
+# far below the Go sidecar budget so a dead session is reported immediately.
+PROBE_TIMEOUT_S = 30
+
 
 async def _account_tweets(api, handle, limit, out):
     """Fetch one account's recent tweets; never raises."""
@@ -82,6 +86,30 @@ async def _list_tweets(api, lid, limit, out):
         out.append(_item(t, t.user.username if t.user else "unknown"))
 
 
+async def _session_ok(api):
+    """Cheap probe: is the injected X session still authenticated?
+
+    twscrape accepts expired cookies at add time and only fails on the first
+    real request (`XClIdAccountError: Logged-out X web app`) — and then parks
+    the calling task in `get_for_queue_or_wait` until the 15-minute queue
+    cooldown expires, i.e. past the sidecar's budget. So the probe is capped:
+    a live session answers a user lookup in <1s, anything slower means the
+    session is dead/throttled and the cycle must be skipped now.
+
+    Returns (ok, detail): ok=False only for auth failure / no answer.
+    """
+    try:
+        await asyncio.wait_for(api.user_by_login("X"), timeout=PROBE_TIMEOUT_S)
+        return True, ""
+    except asyncio.TimeoutError:
+        return False, f"probe timed out after {PROBE_TIMEOUT_S}s"
+    except Exception as e:  # noqa: BLE001
+        detail = f"{type(e).__name__}: {e}"
+        if "Logged-out" in detail or "XClIdAccountError" in detail:
+            return False, detail
+        return True, detail
+
+
 async def collect(accounts, queries, lists, limit):
     db = os.environ.get("TWSCRAPE_DB", "x_accounts.db")
     api = API(db)
@@ -118,6 +146,13 @@ async def collect(accounts, queries, lists, limit):
         print(json.dumps({"error": "no_active_accounts",
                           "hint": "set X_AUTH_TOKEN + X_CT0 env"}),
               file=sys.stderr)
+        return []
+
+    ok, detail = await _session_ok(api)
+    if not ok:
+        print(json.dumps({"error": "x_session_expired", "detail": detail,
+                          "hint": "refresh X_AUTH_TOKEN + X_CT0 from the "
+                                  "browser (x.com cookies)"}), file=sys.stderr)
         return []
 
     out = []
