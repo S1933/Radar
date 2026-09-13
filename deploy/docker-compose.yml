@@ -37,8 +37,10 @@ services:
       X_CT0: ${X_CT0}
     volumes:
       - ../config:/app/config:ro
+      - x_scrape_db:/app/data  # persist twscrape rate-limit/cache state (DB at /app/data/x_accounts.db) across recreates — fresh DB = bursty 429s
     command: ["run", "-config", "config/radar.yaml"]
     restart: unless-stopped
 
 volumes:
   pgdata:
+  x_scrape_db:

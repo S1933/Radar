@@ -147,7 +147,7 @@ func (a *App) collectors(ctx context.Context) []ingestion.Collector {
 		c, err := x.NewCollector(a.Cfg.X, a.Log.With("sub", "x"),
 			x.WithScriptPath("xscraper/collect.py"),
 			x.WithVenvPython(py),
-			x.WithTwscrapeDB("/app/x_accounts.db"),
+			x.WithTwscrapeDB("/app/data/x_accounts.db"),
 		)
 		if err != nil {
 			a.Log.Warn("x disabled", "error", err.Error())
