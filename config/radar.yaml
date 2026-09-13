@@ -144,6 +144,7 @@ x:
     - opencode
     - steipete
     - Dimillian  # auto-added: tweet link liked by user
+    - MrAhmadAwais  # auto-added: tweet link liked by user
     # NOTE: auto-managed — any X handle a user-linked tweet belongs to is appended
     # below by the agent (radar-like-notifs / manual link likes). Do not dedupe by hand.
   limit: 3    # tweets per account/query/list (52 accounts × 15 broke the rate budget and the 3m timeout)
