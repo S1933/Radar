@@ -14,6 +14,11 @@ briefing:
   max_items: 10
   max_trends: 3
 
+notify:
+  # Score threshold for the #radar cards (read by notifications.py). Raised
+  # 0.5 -> 0.6 on 2026-09-13: with the X collector back, 0.5 surfaced too much.
+  score_threshold: 0.6
+
 topics:
   - ai
   - coding-agents
