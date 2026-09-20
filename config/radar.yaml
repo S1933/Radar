@@ -17,7 +17,10 @@ briefing:
 notify:
   # Score threshold for the #radar cards (read by notifications.py). Raised
   # 0.5 -> 0.6 on 2026-09-13: with the X collector back, 0.5 surfaced too much.
-  score_threshold: 0.6
+  # 0.6 -> 0.65 on 2026-09-17 (user request): 48 cards/day was too much noise.
+  # 0.65 -> 0.7 on 2026-09-17 (user request, same evening): 19/day still too much.
+  # Measured on the 2026-09-16/17 backlog: 0.6=48, 0.65=19, 0.7=6 items/day.
+  score_threshold: 0.7
 
 topics:
   - ai
@@ -150,6 +153,9 @@ x:
     - steipete
     - Dimillian  # auto-added: tweet link liked by user
     - MrAhmadAwais  # auto-added: tweet link liked by user
+    - marcelpociot  # auto-added: tweet link liked by user
+    - LiorNsnd  # auto-added: tweet link liked by user
+    - dexhorthy  # auto-added: tweet link liked by user
     # NOTE: auto-managed — any X handle a user-linked tweet belongs to is appended
     # below by the agent (radar-like-notifs / manual link likes). Do not dedupe by hand.
   limit: 3    # tweets per account/query/list (52 accounts × 15 broke the rate budget and the 3m timeout)
@@ -163,6 +169,15 @@ x:
 models:
   base_url: https://opencode.ai/zen/go/v1
   llm_rank: false  # Stage-2 LLM scoring is slow (1 call/item); heuristic is default
+  # Stage-2 scorer: heuristic | llm | jev. "jev" needs TYPESAFE_API_KEY in the
+  # environment; without it the ranker logs a warning and falls back to the
+  # heuristic, so this line is safe to keep in place.
+  rank_engine: jev
+  jev:
+    base_url: https://api.typesafe.ai/v1
+    model: jev-latest
+    timeout: 20s
+    include_threshold: 0.6
   filter:
     model: deepseek-v4-flash
   rank:
