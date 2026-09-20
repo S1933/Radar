@@ -10,7 +10,7 @@ database:
   name: radar
 
 briefing:
-  schedules: ["08:00", "14:00", "20:00"]  # 3 daily briefings (was single 07:00)
+  schedules: ["09:00"]  # un seul créneau : la veille est publiée une fois par jour
   max_items: 10
   max_trends: 3
 
