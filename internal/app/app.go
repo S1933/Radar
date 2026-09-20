@@ -242,6 +242,12 @@ func (a *App) RankPending(ctx context.Context) (int, error) {
 	return a.Ranker.RankPending(ctx)
 }
 
+// RankCompare scores the newest already-scored items with Jev, read-only, so
+// the two rankers can be compared on the same items before switching engines.
+func (a *App) RankCompare(ctx context.Context, limit int) ([]ranking.CompareRow, error) {
+	return a.Ranker.Compare(ctx, 7*24*time.Hour, limit)
+}
+
 // Briefing generates the daily briefing and persists it (no delivery —
 // the chat agent picks it up from the briefings table).
 func (a *App) Briefing(ctx context.Context) (string, error) {

@@ -33,6 +33,7 @@ services:
       REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY}   # Jev Stage-2 ranker (ranking/jev.go)
       X_AUTH_TOKEN: ${X_AUTH_TOKEN}
       X_CT0: ${X_CT0}
     volumes:

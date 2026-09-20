@@ -168,7 +168,30 @@ func (s *Store) TopScoredItems(ctx context.Context, since time.Duration, limit i
 		return nil, err
 	}
 	defer rows.Close()
+	return scanScoredRows(rows)
+}
 
+// RecentScoredItems returns the newest scored items regardless of score. Used
+// by the ranker comparison, where a top-N sample would be biased.
+func (s *Store) RecentScoredItems(ctx context.Context, since time.Duration, limit int) ([]ScoredItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.id, i.source, i.source_id, i.url, i.canonical_url, i.author,
+		       i.title, i.content, i.published_at, i.topics, i.engagement,
+		       s.importance, s.relevance, s.novelty, s.actionability,
+		       s.final_score, s.model
+		FROM items i
+		JOIN scores s ON s.item_id = i.id
+		WHERE i.collected_at > now() - make_interval(secs => $1)
+		ORDER BY i.collected_at DESC
+		LIMIT $2`, int64(since.Seconds()), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanScoredRows(rows)
+}
+
+func scanScoredRows(rows *sql.Rows) ([]ScoredItem, error) {
 	var out []ScoredItem
 	for rows.Next() {
 		var it ScoredItem

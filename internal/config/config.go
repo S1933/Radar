@@ -134,9 +134,30 @@ type ModelsConfig struct {
 	BaseURL string      `yaml:"base_url"` // OpenAI-compatible endpoint
 	APIKey  string      `yaml:"api_key"`
 	LLMRank bool        `yaml:"llm_rank"` // use LLM for Stage-2 scoring (slow; off by default)
-	Filter  ModelConfig `yaml:"filter"`
-	Rank    ModelConfig `yaml:"rank"`
-	Synth   ModelConfig `yaml:"synthesis"`
+	// RankEngine selects the Stage-2 scorer: "heuristic" (default), "llm" or
+	// "jev". Empty keeps the legacy behaviour (llm_rank ? llm : heuristic).
+	RankEngine string      `yaml:"rank_engine"`
+	Jev        JevConfig   `yaml:"jev"`
+	Filter     ModelConfig `yaml:"filter"`
+	Rank       ModelConfig `yaml:"rank"`
+	Synth      ModelConfig `yaml:"synthesis"`
+}
+
+// JevConfig points at the TypeSafe System One endpoint (model "Jev"). One call
+// per item returns typed sub-scores, so the Stage-2 ranker is fast enough to
+// leave enabled.
+type JevConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	BaseURL string `yaml:"base_url"`
+	Model   string `yaml:"model"`
+	APIKey  string `yaml:"-"` // from TYPESAFE_API_KEY, never from YAML
+	// Timeout covers one item's request; Jev answers in well under a second,
+	// so this is a safety net, not a budget.
+	Timeout time.Duration `yaml:"timeout"`
+	// IncludeThreshold is the Noul value above which the item is considered
+	// briefing material. Exposed for the compare command; the live
+	// notification gate stays notify.score_threshold.
+	IncludeThreshold float64 `yaml:"include_threshold"`
 }
 
 type ModelConfig struct {
@@ -169,6 +190,10 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Models.BaseURL == "" {
 		cfg.Models.BaseURL = os.Getenv("OPENAI_BASE_URL")
+	}
+	// TypeSafe key for the Jev Stage-2 ranker (env only, like the rest).
+	if cfg.Models.Jev.APIKey == "" {
+		cfg.Models.Jev.APIKey = os.Getenv("TYPESAFE_API_KEY")
 	}
 	// X session cookies for the twscrape sidecar (auth_token + ct0).
 	if cfg.X.Enabled {
@@ -225,6 +250,18 @@ func (c *Config) defaults() {
 	}
 	if c.Models.BaseURL == "" {
 		c.Models.BaseURL = "https://api.openai.com/v1"
+	}
+	if c.Models.Jev.BaseURL == "" {
+		c.Models.Jev.BaseURL = "https://api.typesafe.ai/v1"
+	}
+	if c.Models.Jev.Model == "" {
+		c.Models.Jev.Model = "jev-latest"
+	}
+	if c.Models.Jev.Timeout == 0 {
+		c.Models.Jev.Timeout = 20 * time.Second
+	}
+	if c.Models.Jev.IncludeThreshold == 0 {
+		c.Models.Jev.IncludeThreshold = 0.6
 	}
 }
 

@@ -40,15 +40,62 @@ type Scorer interface {
 
 func New(models config.ModelsConfig, st *store.Store, log *logging.Logger) *Service {
 	s := &Service{models: models, store: st, log: log}
-	// Stage-2 LLM ranker is active only when explicitly enabled AND an
-	// endpoint + key are configured. It is slow (one LLM call per item),
-	// so the deterministic heuristic remains the default (POC).
-	if models.LLMRank && models.BaseURL != "" && models.APIKey != "" {
-		s.scorer = newLLMScorer(models)
-	} else {
-		s.scorer = newHeuristicScorer()
-	}
+	s.scorer = s.pickScorer()
 	return s
+}
+
+// pickScorer resolves models.rank_engine into a Scorer. It always falls back to
+// the deterministic heuristic when the selected engine cannot run (missing key
+// or endpoint): a ranker that fails to build must never stop the pipeline.
+func (s *Service) pickScorer() Scorer {
+	engine := strings.ToLower(strings.TrimSpace(s.models.RankEngine))
+	switch engine {
+	case "jev":
+		if s.models.Jev.APIKey == "" {
+			s.log.Warn("rank_engine=jev without TYPESAFE_API_KEY, using heuristic")
+			break
+		}
+		s.log.Info("stage-2 ranker", "engine", "jev", "model", s.models.Jev.Model)
+		return newJevScorer(s.models.Jev)
+	case "llm":
+		if s.models.BaseURL == "" || s.models.APIKey == "" {
+			s.log.Warn("rank_engine=llm without endpoint/key, using heuristic")
+			break
+		}
+		return newLLMScorer(s.models)
+	case "heuristic":
+		return newHeuristicScorer()
+	case "":
+		// Legacy behaviour: llm_rank opts into the chat-completion ranker.
+		if s.models.LLMRank && s.models.BaseURL != "" && s.models.APIKey != "" {
+			return newLLMScorer(s.models)
+		}
+	default:
+		s.log.Warn("unknown rank_engine, using heuristic", "engine", s.models.RankEngine)
+	}
+	return newHeuristicScorer()
+}
+
+// scorerTag labels the rows written by the active scorer, so a formula or model
+// change can invalidate them:
+//
+//	DELETE FROM scores WHERE model = '<tag>';
+func (s *Service) scorerTag() string {
+	switch sc := s.scorer.(type) {
+	case *jevScorer:
+		return sc.Tag()
+	case *llmScorer:
+		return "llm:" + s.models.Rank.Model
+	default:
+		return "heuristic-v2"
+	}
+}
+
+// JevScorer returns the Jev scorer when it is the active engine (used by the
+// compare command to score the backlog without writing anything).
+func (s *Service) JevScorer() (*jevScorer, bool) {
+	sc, ok := s.scorer.(*jevScorer)
+	return sc, ok
 }
 
 // SetScorer overrides the scoring strategy (tests, future LLM stage).
@@ -64,12 +111,15 @@ func (s *Service) RankPending(ctx context.Context) (int, error) {
 	var n int
 	for _, it := range items {
 		sc, err := s.scorer.Score(ctx, it)
+		tag := s.scorerTag()
 		if err != nil {
-			// LLM stage failed (rate-limit, parse) — fall back to the
+			// LLM/Jev stage failed (rate-limit, transport) — fall back to the
 			// deterministic heuristic so the item is still scored and the
-			// pending queue does not loop forever on the same items.
-			s.log.Warn("score item (llm failed, heuristic fallback)", "id", it.DBID, "error", err)
+			// pending queue does not loop forever on the same items. The tag
+			// must follow the values actually written.
+			s.log.Warn("score item (stage-2 failed, heuristic fallback)", "id", it.DBID, "error", err)
 			sc, _ = newHeuristicScorer().Score(ctx, it)
+			tag = "heuristic-v2"
 		}
 		sc.Final = finalScore(sc)
 		// Bump on every change of formula — the model tag is
@@ -78,7 +128,7 @@ func (s *Service) RankPending(ctx context.Context) (int, error) {
 		// and let RankPending recompute them. heuristic-v2
 		// ships with the BM25 relevance; v1 was the
 		// substring-count relevance.
-		sc.Model = "heuristic-v2"
+		sc.Model = tag
 		if err := s.store.SaveScore(ctx, it.DBID, sc); err != nil {
 			s.log.Warn("save score", "id", it.DBID, "error", err)
 			continue
