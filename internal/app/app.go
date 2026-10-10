@@ -9,6 +9,7 @@ import (
 
 	"github.com/S1933/personal-radar/internal/briefing"
 	"github.com/S1933/personal-radar/internal/collectors/github"
+	"github.com/S1933/personal-radar/internal/collectors/mcp"
 	"github.com/S1933/personal-radar/internal/collectors/reddit"
 	"github.com/S1933/personal-radar/internal/collectors/rss"
 	"github.com/S1933/personal-radar/internal/collectors/x"
@@ -154,6 +155,9 @@ func (a *App) collectors(ctx context.Context) []ingestion.Collector {
 		} else {
 			out = append(out, c)
 		}
+	}
+	if a.Cfg.MCP.Enabled && a.Cfg.MCP.URL != "" {
+		out = append(out, mcp.NewCollector(a.Cfg.MCP, a.Log.With("sub", "mcp")))
 	}
 	return out
 }

@@ -156,6 +156,8 @@ x:
     - marcelpociot  # auto-added: tweet link liked by user
     - LiorNsnd  # auto-added: tweet link liked by user
     - dexhorthy  # auto-added: tweet link liked by user
+    - 0xCodila  # auto-added: tweet link liked by user
+    - pgllmt  # auto-added: tweet link liked by user
     # NOTE: auto-managed — any X handle a user-linked tweet belongs to is appended
     # below by the agent (radar-like-notifs / manual link likes). Do not dedupe by hand.
   limit: 3    # tweets per account/query/list (52 accounts × 15 broke the rate budget and the 3m timeout)
@@ -165,6 +167,23 @@ x:
     - "AI agent framework"
   lists:
     - "2093633176459436076"  # user X list "Radar IA" — followed live (add/remove = auto)
+
+mcp:
+  # Hermes France MCP — veille de la communauté Discord Hermes France, exposée
+  # en serveur MCP (transport HTTP streamable, lecture seule, sans token).
+  # Le collector lit get_recent et transforme les messages qui partagent un
+  # lien en items radar (score, dédup avec RSS/X, cartes #radar).
+  enabled: true
+  url: https://vps-srv1053190.tail927db4.ts.net/mcp
+  name: hermes-france
+  channels: []        # vide = tous les salons suivis par le serveur
+  hours: 6            # fenêtre par cycle (le collect tourne toutes les 20 min)
+  limit: 100          # max du serveur ; au-delà le collector repasse salon par salon
+  min_chars: 0        # 0 = pas de filtre de longueur
+  min_reactions: 0    # >0 = ne garder que les messages validés par la communauté
+  allow_linkless: false  # true = ingérer aussi les messages sans lien (non postables en carte)
+  topics: [ai, coding-agents]
+  timeout: 60s
 
 models:
   base_url: https://opencode.ai/zen/go/v1

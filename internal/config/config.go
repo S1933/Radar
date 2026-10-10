@@ -25,6 +25,7 @@ type Config struct {
 	Reddit RedditConfig `yaml:"reddit"`
 	GitHub GitHubConfig `yaml:"github"`
 	X      XConfig      `yaml:"x"`
+	MCP    MCPConfig    `yaml:"mcp"`
 
 	Models ModelsConfig `yaml:"models"`
 }
@@ -128,6 +129,39 @@ type XConfig struct {
 	BearerToken string        `yaml:"-"`     // from env X_BEARER_TOKEN
 	Limit       int           `yaml:"limit"`   // tweets per account / query / list
 	Timeout     time.Duration `yaml:"timeout"` // sidecar invocation budget
+}
+
+// MCPConfig points the pipeline at a remote MCP server (streamable HTTP) and
+// controls which of its messages become items. The first user of this is
+// "Hermes France MCP", the read-only veille of the Hermes France Discord
+// community: the server hands back Discord messages and the collector keeps
+// the ones worth a card.
+type MCPConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	URL     string `yaml:"url"`
+	// Name is the server label stored in the item metadata (provenance).
+	Name string `yaml:"name"`
+	// Channels restricts the fetch to a subset of the server's channels.
+	// Empty means "every channel" (one unfiltered call, plus a per-channel
+	// backfill when the window is clipped).
+	Channels []string `yaml:"channels"`
+	// Hours is the lookback window per cycle — keep it a few times the
+	// collect interval so a restarted container does not lose messages.
+	Hours float64 `yaml:"hours"`
+	// Limit caps the messages per call (the server caps it at 100).
+	Limit int `yaml:"limit"`
+	// MinChars drops shorter messages (0 = keep everything).
+	MinChars int `yaml:"min_chars"`
+	// MinReactions keeps only community-endorsed messages (0 = all).
+	MinReactions int `yaml:"min_reactions"`
+	// AllowLinkless also ingests messages without a link. Off by default:
+	// a URL-less item can be ranked but never carded (notifications.py
+	// skips items without URL) and never liked, so it is dead weight.
+	AllowLinkless bool `yaml:"allow_linkless"`
+	// Topics are applied verbatim to every item before topics.Enrich pads
+	// the list to three tags.
+	Topics  []string      `yaml:"topics"`
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 type ModelsConfig struct {
@@ -247,6 +281,24 @@ func (c *Config) defaults() {
 		// The previous 60s was not enough on slow days and caused spurious
 		// 0-item cycles.
 		c.X.Timeout = 3 * time.Minute
+	}
+	if c.MCP.Name == "" {
+		c.MCP.Name = "mcp"
+	}
+	if c.MCP.Hours == 0 {
+		// A few times the 20-minute collect interval: a restarted
+		// container backfills instead of losing the messages it
+		// missed, and 6h keeps the whole-window call under the
+		// 100-message cap at typical community volume, so the
+		// per-channel backfill (and its per-client rate limit) is
+		// rarely needed.
+		c.MCP.Hours = 6
+	}
+	if c.MCP.Limit == 0 {
+		c.MCP.Limit = 100 // server-side maximum
+	}
+	if c.MCP.Timeout == 0 {
+		c.MCP.Timeout = 60 * time.Second
 	}
 	if c.Models.BaseURL == "" {
 		c.Models.BaseURL = "https://api.openai.com/v1"
