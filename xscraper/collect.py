@@ -57,7 +57,9 @@ async def _account_tweets(api, handle, limit, out):
                           "detail": str(e)}), file=sys.stderr)
         return
     for t in tweets:
-        out.append(_item(t, handle))
+        it = _item(t, handle)
+        if it:
+            out.append(it)
 
 
 async def _query_tweets(api, q, limit, out):
@@ -70,7 +72,9 @@ async def _query_tweets(api, q, limit, out):
               file=sys.stderr)
         return
     for t in tweets:
-        out.append(_item(t, t.user.username if t.user else "unknown"))
+        it = _item(t, t.user.username if t.user else "unknown")
+        if it:
+            out.append(it)
 
 
 async def _list_tweets(api, lid, limit, out):
@@ -83,7 +87,9 @@ async def _list_tweets(api, lid, limit, out):
                           "detail": str(e)}), file=sys.stderr)
         return
     for t in tweets:
-        out.append(_item(t, t.user.username if t.user else "unknown"))
+        it = _item(t, t.user.username if t.user else "unknown")
+        if it:
+            out.append(it)
 
 
 async def _session_ok(api):
@@ -206,6 +212,10 @@ def _cooldown_state(db):
 
 
 def _item(t, handle):
+    # Skip retweets: the original tweet is (or will be) collected separately,
+    # keeping the RT would duplicate the same content under two item ids.
+    if getattr(t, "retweetedTweet", None) is not None:
+        return None
     text = t.rawContent or t.text or ""
     author = handle or (t.user.username if t.user else "unknown")
     return {
@@ -220,7 +230,11 @@ def _item(t, handle):
         "topics": ["software-engineering", "open-source"],
         "language": t.lang or "en",
         "metadata": {"mode": "twscrape", "likes": t.likeCount,
-                     "retweets": t.retweetCount},
+                     "retweets": t.retweetCount,
+                     # First photo (or video thumbnail) — used by Discord embeds
+                     # in the cards; empty list when the tweet has no media.
+                     "media": [p.url for p in (t.media.photos if t.media else [])]
+                              + ([t.media.videos[0].thumbnailUrl] if (t.media and t.media.videos) else [])},
     }
 
 

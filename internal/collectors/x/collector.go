@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/S1933/personal-radar/internal/config"
@@ -55,10 +56,10 @@ func NewCollector(cfg config.XConfig, log Logger, opts ...Option) (*Collector, e
 // Option overrides collector defaults (used in tests / deployment).
 type Option func(*Collector)
 
-func WithScriptPath(p string) Option        { return func(c *Collector) { c.scriptPath = p } }
-func WithVenvPython(p string) Option        { return func(c *Collector) { c.venvPython = p } }
-func WithTwscrapeDB(p string) Option        { return func(c *Collector) { c.twscrapeDB = p } }
-func WithTimeout(d time.Duration) Option    { return func(c *Collector) { c.timeout = d } }
+func WithScriptPath(p string) Option     { return func(c *Collector) { c.scriptPath = p } }
+func WithVenvPython(p string) Option     { return func(c *Collector) { c.venvPython = p } }
+func WithTwscrapeDB(p string) Option     { return func(c *Collector) { c.twscrapeDB = p } }
+func WithTimeout(d time.Duration) Option { return func(c *Collector) { c.timeout = d } }
 
 // num extracts an int64 from a JSON-decoded number (float64, json.Number)
 // or a numeric string ("123" — twscrape serializes counts as strings).
@@ -129,15 +130,15 @@ func (c *Collector) Collect(ctx context.Context) ([]model.Item, error) {
 	}
 
 	var raw []struct {
-		SourceID    string            `json:"source_id"`
-		Author      string            `json:"author"`
-		Title       string            `json:"title"`
-		URL         string            `json:"url"`
-		Content     string            `json:"content"`
-		PublishedAt *time.Time        `json:"published_at"`
-		Topics      []string          `json:"topics"`
-		Language    string            `json:"language"`
-		Metadata    map[string]any    `json:"metadata"`
+		SourceID    string         `json:"source_id"`
+		Author      string         `json:"author"`
+		Title       string         `json:"title"`
+		URL         string         `json:"url"`
+		Content     string         `json:"content"`
+		PublishedAt *time.Time     `json:"published_at"`
+		Topics      []string       `json:"topics"`
+		Language    string         `json:"language"`
+		Metadata    map[string]any `json:"metadata"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &raw); err != nil {
 		return nil, fmt.Errorf("x: parse sidecar output: %w", err)
@@ -193,6 +194,16 @@ func toStringMap(in map[string]any) map[string]string {
 			out[k] = val
 		case nil:
 			out[k] = ""
+		case []any:
+			// Media lists (image URLs) degrade to a space-joined string;
+			// the card builder splits on whitespace to re-embed them.
+			parts := make([]string, 0, len(val))
+			for _, e := range val {
+				if s, ok := e.(string); ok {
+					parts = append(parts, s)
+				}
+			}
+			out[k] = strings.Join(parts, " ")
 		default:
 			out[k] = fmt.Sprintf("%v", val)
 		}

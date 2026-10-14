@@ -132,6 +132,11 @@ func (c *Collector) collectFeed(ctx context.Context, feed config.RSSFeed) ([]mod
 			Language:     parsed.Language,
 			Metadata:     map[string]string{"feed": feed.Name},
 		}
+		// Feed-item cover (rare, but some blogs publish one per post). Falls
+		// back to the OG image fetch at card-build time when absent.
+		if entry.Image != nil && entry.Image.URL != "" {
+			it.Metadata["media"] = entry.Image.URL
+		}
 		if it.Title == "" && it.Content == "" {
 			continue
 		}

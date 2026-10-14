@@ -38,6 +38,7 @@ services:
       X_CT0: ${X_CT0}
     volumes:
       - ../config:/app/config:ro
+      - ../xscraper:/app/xscraper:ro  # live script (RT dedup fix survives image rebuilds)
       - x_scrape_db:/app/data  # persist twscrape rate-limit/cache state (DB at /app/data/x_accounts.db) across recreates — fresh DB = bursty 429s
     command: ["run", "-config", "config/radar.yaml"]
     restart: unless-stopped
