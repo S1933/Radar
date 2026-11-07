@@ -10,7 +10,11 @@ database:
   name: radar
 
 briefing:
-  schedules: ["09:00"]  # un seul créneau : la veille est publiée une fois par jour
+  # This slot runs BOTH the ranking stage and the briefing synthesis (~2 min).
+  # Moved 09:00 → 08:05 on 2026-11-07: the daily cards now go out at 08:33 with
+  # the morning recap, and they read the scores — scoring after them meant an
+  # empty selection every day.
+  schedules: ["08:05"]
   max_items: 10
   max_trends: 3
 
@@ -19,8 +23,22 @@ notify:
   # 0.5 -> 0.6 on 2026-09-13: with the X collector back, 0.5 surfaced too much.
   # 0.6 -> 0.65 on 2026-09-17 (user request): 48 cards/day was too much noise.
   # 0.65 -> 0.7 on 2026-09-17 (user request, same evening): 19/day still too much.
+  # 0.7 -> 0.65 on 2026-10-18 (user request): 0.7 was down to 9/day and the 10-card
+  # cap already bound on busy days; 0.65 gives ~24/day before the cap (~8 minimum on
+  # a quiet day instead of 3) for a near-identical token cost, since the cap is what
+  # bounds the daily-cards run. Measured 2026-10-11..17: 0.7=9/day, 0.65=24/day.
   # Measured on the 2026-09-16/17 backlog: 0.6=48, 0.65=19, 0.7=6 items/day.
-  score_threshold: 0.7
+  score_threshold: 0.65
+  # Cards emitted per day (best scores first; the rest are skipped for good).
+  # 10 -> 14 on 2026-10-18, then 14 -> 3 on 2026-11-07: 14 cards/day produced 98
+  # cards and ZERO reactions in a week — the channel was a firehose, not a
+  # selection. 3 is a decision the reader can make in 20 seconds.
+  max_cards: 3
+  # Chars of source content handed to the summariser per card (favorite feeds get a
+  # richer extract). Kept at 2000/3500: a 1500/2500 cut measured IDENTICAL payloads
+  # (real sources are already shorter), so lowering it would only risk thin summaries.
+  content_limit: 2000
+  favorite_content_limit: 3500
 
 topics:
   - ai
@@ -158,6 +176,27 @@ x:
     - dexhorthy  # auto-added: tweet link liked by user
     - 0xCodila  # auto-added: tweet link liked by user
     - pgllmt  # auto-added: tweet link liked by user
+    - 0xMovez  # auto-added: tweet link liked by user
+    - AnthropicAI  # auto-added: tweet link liked by user
+    - BhurkeSiddhesh  # auto-added: tweet link liked by user
+    - Cloudflare  # auto-added: tweet link liked by user
+    - DarioAmodei  # auto-added: tweet link liked by user
+    - DataScienceDojo  # auto-added: tweet link liked by user
+    - EmunaEliran  # auto-added: tweet link liked by user
+    - GoKiteAI  # auto-added: tweet link liked by user
+    - HermesWatcher  # auto-added: tweet link liked by user
+    - KirkDBorne  # auto-added: tweet link liked by user
+    - StragglerLiu  # auto-added: tweet link liked by user
+    - aiedge_  # auto-added: tweet link liked by user
+    - c0ngwang  # auto-added: tweet link liked by user
+    - ctatedev  # auto-added: tweet link liked by user
+    - dani_avila7  # auto-added: tweet link liked by user
+    - iamdavidhill  # auto-added: tweet link liked by user
+    - karenxcheng  # auto-added: tweet link liked by user
+    - omarsar0  # auto-added: tweet link liked by user
+    - panditdhamdhere  # auto-added: tweet link liked by user
+    - rafalwilinski  # auto-added: tweet link liked by user
+    - stretchcloud  # auto-added: tweet link liked by user
     # NOTE: auto-managed — any X handle a user-linked tweet belongs to is appended
     # below by the agent (radar-like-notifs / manual link likes). Do not dedupe by hand.
   limit: 3    # tweets per account/query/list (52 accounts × 15 broke the rate budget and the 3m timeout)
